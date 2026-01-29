@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>酒店中央空调智能监控系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            min-height: 100vh;
+            overflow-x: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        .glass-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-online { background: #10b981; box-shadow: 0 0 8px #10b981; }
+        .status-offline { background: #ef4444; animation: none; }
+        .status-warning { background: #f59e0b; box-shadow: 0 0 8px #f59e0b; }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .slide-up { animation: slideUp 0.3s ease-out; }
+        
+        @keyframes slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        
+        .btn-press:active { transform: scale(0.95); }
+        
+        .device-card { transition: all 0.2s; }
+        .device-card:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+        
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(255, 255, 255, 0.98);
+            backdrop-filter: blur(20px);
+            border-top: 1px solid rgba(0,0,0,0.05);
+            padding-bottom: env(safe-area-inset-bottom);
+            z-index: 50;
+        }
+        
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .sequential-indicator { position: relative; overflow: hidden; }
+        .sequential-indicator::after {
+            content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+            animation: shimmer 2s infinite;
+        }
+        
+        @keyframes shimmer { 0% { left: -100%; } 100% { left: 100%; } }
+        
+        .temp-gradient {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* 调试面板样式 */
+        .debug-panel {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            color: #0f0;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 10px;
+            font-family: monospace;
+            z-index: 9999;
+            max-width: 200px;
+            display: none;
+        }
+        
+        .connection-status {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: #ef4444;
+            z-index: 100;
+            transition: background 0.3s;
+        }
+        .connection-status.online { background: #10b981; }
+        .connection-status.connecting { background: #f59e0b; animation: pulse 1s infinite; }
+    </style>
+</head>
+<body class="text-gray-800 pb-20">
+
+    <!-- 连接状态条 -->
+    <div id="conn-status" class="connection-status"></div>
+
+    <!-- 调试面板（双击顶部显示） -->
+    <div id="debug-panel" class="debug-panel">
+        <div>模式: <span id="debug-mode">模拟</span></div>
+        <div>Token: <span id="debug-token">未获取</span></div>
+        <div>设备: <span id="debug-device">未连接</span></div>
+        <div>最后更新: <span id="debug-time">--</span></div>
+        <button onclick="app.toggleDebug()" style="margin-top:5px;padding:2px 5px;">关闭</button>
+    </div>
+
+    <!-- 主容器 -->
+    <div id="app" class="max-w-md mx-auto min-h-screen relative">
+        
+        <!-- 首页视图 -->
+        <div id="home-view" class="p-4 space-y-4 slide-up">
+            <div class="flex justify-between items-center mb-6">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-800">能耗监测中心</h1>
+                    <p class="text-sm text-gray-500 mt-1" id="current-time">--</p>
+                </div>
+                <div class="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-white" ondblclick="app.toggleDebug()">
+                    <i class="fas fa-hotel"></i>
+                </div>
+            </div>
+
+            <!-- API配置提示（仅在未配置时显示） -->
+            <div id="config-alert" class="hidden bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4 rounded-r">
+                <div class="flex">
+                    <i class="fas fa-exclamation-triangle text-yellow-400 mr-2"></i>
+                    <div class="text-sm text-yellow-700">
+                        <p class="font-bold">演示模式</p>
+                        <p>当前显示模拟数据。<br>请配置有人云参数后连接真实设备。</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-card rounded-2xl p-4 mb-4">
+                <div class="flex justify-between items-center mb-3">
+                    <span class="text-sm font-medium text-gray-600">系统总览</span>
+                    <span class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">全部正常</span>
+                </div>
+                <div class="grid grid-cols-3 gap-4 text-center">
+                    <div>
+                        <div class="text-2xl font-bold text-blue-600" id="total-running">18</div>
+                        <div class="text-xs text-gray-500">运行中</div>
+                    </div>
+                    <div>
+                        <div class="text-2xl font-bold text-gray-700" id="total-stop">0</div>
+                        <div class="text-xs text-gray-500">停止</div>
+                    </div>
+                    <div>
+                        <div class="text-2xl font-bold text-red-500" id="total-fault">0</div>
+                        <div class="text-xs text-gray-500">故障</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-3" id="hotel-list"></div>
+
+            <div class="glass-card rounded-2xl p-4 mt-4">
+                <h3 class="font-semibold mb-3 text-gray-700">快捷操作</h3>
+                <div class="grid grid-cols-2 gap-3">
+                    <button onclick="app.emergencyStop()" class="btn-press bg-red-500 text-white py-3 rounded-xl font-medium shadow-lg shadow-red-200">
+                        <i class="fas fa-stop-circle mr-2"></i>紧急停止
+                    </button>
+                    <button onclick="app.autoModeAll()" class="btn-press bg-blue-500 text-white py-3 rounded-xl font-medium shadow-lg shadow-blue-200">
+                        <i class="fas fa-magic mr-2"></i>全自动模式
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 控制面板视图 -->
+        <div id="control-view" class="hidden p-4 space-y-4">
+            <div class="flex items-center mb-4">
+                <button onclick="app.goHome()" class="btn-press w-10 h-10 rounded-full bg-white shadow flex items-center justify-center mr-3">
+                    <i class="fas fa-chevron-left text-gray-600"></i>
+                </button>
+                <div class="flex-1">
+                    <h2 id="control-title" class="text-xl font-bold text-gray-800">美的空调系统</h2>
+                    <p id="control-subtitle" class="text-xs text-gray-500">汉庭酒店24层</p>
+                </div>
+                <div id="system-status-badge" class="px-3 py-1 rounded-full bg-green-100 text-green-700 text-xs font-medium">自动模式</div>
+            </div>
+
+            <div class="glass-card rounded-2xl p-4 flex justify-between items-center">
+                <div class="flex items-center space-x-3">
+                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-xl">
+                        <i class="fas fa-thermometer-half"></i>
+                    </div>
+                    <div>
+                        <div class="text-xs text-gray-500">总回水温度</div>
+                        <div class="text-2xl font-bold temp-gradient" id="return-temp">12.5°C</div>
+                    </div>
+                </div>
+                <div class="text-right">
+                    <div class="text-xs text-gray-500">系统效率</div>
+                    <div class="text-lg font-bold text-gray-700">92%</div>
+                </div>
+            </div>
+
+            <div class="glass-card rounded-2xl p-4">
+                <h3 class="font-semibold mb-3 flex items-center">
+                    <i class="fas fa-bolt text-yellow-500 mr-2"></i>一键控制区
+                    <span class="ml-auto text-xs text-gray-400 font-normal">联动开关</span>
+                </h3>
+                <div class="grid grid-cols-2 gap-3 mb-2">
+                    <button onclick="app.oneKeyStart()" id="btn-start-all" class="btn-press bg-gradient-to-r from-green-500 to-green-600 text-white py-4 rounded-xl font-semibold shadow-lg shadow-green-200 flex items-center justify-center space-x-2">
+                        <i class="fas fa-play"></i><span>一键启动</span>
+                    </button>
+                    <button onclick="app.oneKeyStop()" id="btn-stop-all" class="btn-press bg-gradient-to-r from-gray-600 to-gray-700 text-white py-4 rounded-xl font-semibold shadow-lg shadow-gray-200 flex items-center justify-center space-x-2">
+                        <i class="fas fa-stop"></i><span>一键停止</span>
+                    </button>
+                </div>
+                <p class="text-xs text-gray-500 text-center bg-gray-50 py-2 rounded-lg">
+                    <i class="fas fa-info-circle mr-1"></i>自动执行：先泵后机启动 / 先机后泵停止
+                </p>
+                <div id="sequence-status" class="hidden mt-3 p-3 bg-blue-50 rounded-lg text-sm text-blue-700">
+                    <div class="flex items-center">
+                        <div class="loading-spinner mr-2"></div>
+                        <span id="sequence-text">正在执行联动程序...</span>
+                    </div>
+                    <div class="w-full bg-blue-200 rounded-full h-1.5 mt-2">
+                        <div class="bg-blue-600 h-1.5 rounded-full transition-all duration-300" id="sequence-progress" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-card rounded-2xl p-4">
+                <h3 class="font-semibold mb-3 flex items-center justify-between">
+                    <span><i class="fas fa-fan text-blue-500 mr-2"></i>冷冻水泵控制 <span class="text-xs font-normal text-gray-500">(3台)</span></span>
+                    <span class="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded">联动配置</span>
+                </h3>
+                <div class="space-y-3" id="pump-list"></div>
+            </div>
+
+            <div class="glass-card rounded-2xl p-4">
+                <h3 class="font-semibold mb-3 flex items-center">
+                    <i class="fas fa-server text-indigo-500 mr-2"></i>空调主机控制 <span class="text-xs font-normal text-gray-500 ml-1">(4台)</span>
+                </h3>
+                <div class="grid grid-cols-2 gap-3" id="host-list"></div>
+            </div>
+
+            <div class="glass-card rounded-2xl p-4">
+                <h3 class="font-semibold mb-3 flex items-center text-red-600">
+                    <i class="fas fa-bell mr-2"></i>当前报警
+                    <span class="ml-auto text-xs bg-red-100 text-red-600 px-2 py-1 rounded-full" id="alarm-count">0</span>
+                </h3>
+                <div class="space-y-2 max-h-32 overflow-y-auto" id="alarm-list">
+                    <div class="text-sm text-gray-500 text-center py-4">暂无报警信息</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 能耗视图（与之前一致） -->
+        <div id="energy-view" class="hidden p-4 space-y-4">
+            <div class="flex justify-between items-center mb-2">
+                <h1 class="text-2xl font-bold text-gray-800">能耗统计</h1>
+                <select class="text-sm border rounded-lg px-3 py-1 bg-white" onchange="app.updateEnergyChart(this.value)">
+                    <option value="day">今日</option>
+                    <option value="week">本周</option>
+                    <option value="month">本月</option>
+                </select>
+            </div>
+            <div class="glass-card rounded-2xl p-6 text-center bg-gradient-to-br from-blue-500 to-blue-600 text-white">
+                <div class="text-blue-100 mb-1">今日累计用电</div>
+                <div class="text-4xl font-bold mb-2">2,458 <span class="text-xl">kWh</span></div>
+                <div class="text-sm text-blue-100 flex items-center justify-center">
+                    <i class="fas fa-arrow-up mr-1"></i> 较昨日节约 12%
+                </div>
+            </div>
+            <div class="glass-card rounded-2xl p-4">
+                <canvas id="energyChart" height="200"></canvas>
+            </div>
+            <!-- 分项统计省略，与之前相同 -->
+        </div>
+
+        <!-- 底部导航 -->
+        <div class="bottom-nav flex justify-around items-center py-3 px-6">
+            <button onclick="app.switchTab('home')" class="nav-btn flex flex-col items-center space-y-1 text-blue-600" data-tab="home">
+                <i class="fas fa-home text-xl"></i><span class="text-xs">首页</span>
+            </button>
+            <button onclick="app.switchTab('energy')" class="nav-btn flex flex-col items-center space-y-1 text-gray-400" data-tab="energy">
+                <i class="fas fa-chart-line text-xl"></i><span class="text-xs">能耗</span>
+            </button>
+            <button onclick="app.switchTab('settings')" class="nav-btn flex flex-col items-center space-y-1 text-gray-400" data-tab="settings">
+                <i class="fas fa-cog text-xl"></i><span class="text-xs">设置</span>
+            </button>
+        </div>
+
+        <!-- 提示框 -->
+        <div id="toast" class="fixed top-20 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-xl z-50 hidden transition-all duration-300">
+            <span id="toast-text">操作成功</span>
+        </div>
+    </div>
+
+    <script>
+    // ===================== 有人云7.1.2配置区 =====================
+    const USR_CLOUD_CONFIG = {
+        // 从有人云开发者中心获取（步骤3中会教您找）
+        appKey: '6VEAijK2',      // 空字符串=演示模式
+        appSecret: 'd9xxuobdhr7onyhyvkvzc2uvz2sq5xx4',   // 空字符串=演示模式
+        
+        // API端点（有人云7.1.2标准地址）
+        baseURL: 'https://openapi.mp.usr.cn/usrCloud/vn',
+        
+        // 设备ID映射（从有人云设备列表获取）
+        devices: {
+            midea: { devId: '', name: '美的系统', location: '汉庭24层' },
+            gree: { devId: '', name: '格力系统', location: '汉庭24层' },
+            prst: { devId: '', name: '普瑞斯顿', location: '汉庭一层' },
+            hitachi: { devId: '', name: '日立系统', location: '海关宜必思' }
+        },
+        
+        // 数据点配置（必须和有人云模板中的数据点ID完全一致）
+        dataPoints: {
+            midea: {
+                pump1: 'Midea_Pump1_Run', pump2: 'Midea_Pump2_Run', pump3: 'Midea_Pump3_Run',
+                host1: 'Midea_Host1_Run', host2: 'Midea_Host2_Run', host3: 'Midea_Host3_Run', host4: 'Midea_Host4_Run',
+                temp: 'Midea_Temp_Return', fault: 'Midea_Fault'
+            },
+            gree: {
+                pump1: 'Gree_Pump1_Run', pump2: 'Gree_Pump2_Run', pump3: 'Gree_Pump3_Run',
+                host1: 'Gree_Host1_Run', host2: 'Gree_Host2_Run', host3: 'Gree_Host3_Run', host4: 'Gree_Host4_Run',
+                temp: 'Gree_Temp_Return', fault: 'Gree_Fault'
+            },
+            prst: {
+                pump1: 'Prst_Pump1_Run', pump2: 'Prst_Pump2_Run', pump3: 'Prst_Pump3_Run',
+                host1: 'Prst_Host1_Run', host2: 'Prst_Host2_Run', host3: 'Prst_Host3_Run', 
+                host4: 'Prst_Host4_Run', host5: 'Prst_Host5_Run', host6: 'Prst_Host6_Run',
+                temp: 'Prst_Temp_Return', fault: 'Prst_Fault'
+            },
+            hitachi: {
+                pump1: 'Hitachi_Pump1_Run', pump2: 'Hitachi_Pump2_Run', pump3: 'Hitachi_Pump3_Run',
+                host1: 'Hitachi_Host1_Run', host2: 'Hitachi_Host2_Run', host3: 'Hitachi_Host3_Run', host4: 'Hitachi_Host4_Run',
+                temp: 'Hitachi_Temp_Return', fault: 'Hitachi_Fault'
+            }
+        },
+        
+        // 刷新间隔（毫秒）
+        refreshInterval: 5000
+    };
+
+    // ===================== Token管理器 =====================
+    const TokenManager = {
+        token: null,
+        expireTime: 0,
+        
+        async getToken() {
+            const now = Date.now();
+            if (this.token && now < this.expireTime) return this.token;
+            
+            // 演示模式检查
+            if (!USR_CLOUD_CONFIG.appKey) {
+                console.log('演示模式：无需Token');
+                return 'demo-token';
+            }
+            
+            try {
+                app.setConnectionStatus('connecting');
+                const res = await fetch(`${USR_CLOUD_CONFIG.baseURL}/auth/getToken`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        appKey: USR_CLOUD_CONFIG.appKey,
+                        appSecret: USR_CLOUD_CONFIG.appSecret
+                    })
+                });
+                const data = await res.json();
+                
+                if (data.code === 0) {
+                    this.token = data.data.token;
+                    this.expireTime = now + 7200 * 1000 - 60000; // 2小时-1分钟
+                    app.setConnectionStatus('online');
+                    app.updateDebugInfo('token', '已获取');
+                    return this.token;
+                } else {
+                    throw new Error(data.msg);
+                }
+            } catch (e) {
+                app.setConnectionStatus('offline');
+                app.updateDebugInfo('token', '失败:'+e.message);
+                throw e;
+            }
+        }
+    };
+
+    // ===================== 应用主逻辑 =====================
+    const app = {
+        currentView: 'home',
+        currentBrand: null,
+        isDemoMode: true,
+        refreshTimer: null,
+        
+        systems: {
+            midea: { name: '美的', location: '汉庭酒店24层', online: true, hosts: 4, pumps: 3, runningHosts: 4, runningPumps: 3, faults: 0, temp: 12.5, alarms: [] },
+            gree: { name: '格力', location: '汉庭酒店24层', online: true, hosts: 4, pumps: 3, runningHosts: 4, runningPumps: 3, faults: 0, temp: 12.5, alarms: [] },
+            prst: { name: '普瑞斯顿', location: '汉庭酒店一层', online: false, hosts: 6, pumps: 3, runningHosts: 0, runningPumps: 0, faults: 0, temp: '--', alarms: [] },
+            hitachi: { name: '日立', location: '海关宜必思酒店', online: true, hosts: 4, pumps: 3, runningHosts: 4, runningPumps: 3, faults: 0, temp: 12.5, alarms: [] }
+        },
+
+        devices: {
+            midea: { pumps: [{id:1,status:'running',link:'group1'},{id:2,status:'stop',link:'group2'},{id:3,status:'running',link:'group1'}], hosts: [{id:1,status:'running'},{id:2,status:'stop'},{id:3,status:'running'},{id:4,status:'running'}] },
+            gree: { pumps: [{id:1,status:'running',link:'group1'},{id:2,status:'stop',link:'group2'},{id:3,status:'running',link:'group1'}], hosts: [{id:1,status:'running'},{id:2,status:'running'},{id:3,status:'running'},{id:4,status:'stop'}] },
+            prst: { pumps: [{id:1,status:'stop',link:'disabled'},{id:2,status:'stop',link:'disabled'},{id:3,status:'stop',link:'disabled'}], hosts: [{id:1,status:'stop'},{id:2,status:'stop'},{id:3,status:'stop'},{id:4,status:'stop'},{id:5,status:'stop'},{id:6,status:'stop'}] },
+            hitachi: { pumps: [{id:1,status:'running',link:'group1'},{id:2,status:'running',link:'group2'},{id:3,status:'running',link:'group1'}], hosts: [{id:1,status:'running'},{id:2,status:'running'},{id:3,status:'running'},{id:4,status:'running'}] }
+        },
+
+        init() {
+            // 检查模式
+            this.isDemoMode = !USR_CLOUD_CONFIG.appKey || !USR_CLOUD_CONFIG.appSecret;
+            if (this.isDemoMode) {
+                document.getElementById('config-alert').classList.remove('hidden');
+                this.updateDebugInfo('mode', '演示模式');
+            } else {
+                this.updateDebugInfo('mode', '联网模式');
+                this.startAutoRefresh();
+            }
+            
+            // 尝试从URL获取参数（有人云嵌入时会传参）
+            this.parseUrlParams();
+            
+            this.updateTime();
+            setInterval(() => this.updateTime(), 1000);
+            this.renderHome();
+            this.initEnergyChart();
+        },
+
+        parseUrlParams() {
+            const params = new URLSearchParams(window.location.search);
+            const devId = params.get('devId');
+            const token = params.get('token');
+            
+            if (devId) {
+                // 有人云传递了设备ID，自动填充到第一个系统
+                USR_CLOUD_CONFIG.devices.midea.devId = devId;
+                this.updateDebugInfo('device', 'URL传入:'+devId);
+            }
+        },
+
+        setConnectionStatus(status) {
+            const bar = document.getElementById('conn-status');
+            bar.className = 'connection-status ' + status;
+        },
+
+        updateDebugInfo(key, value) {
+            const el = document.getElementById('debug-' + key);
+            if (el) el.textContent = value;
+            if (key === 'token' && value.length > 10) {
+                el.textContent = value.substring(0, 8) + '...';
+            }
+            document.getElementById('debug-time').textContent = new Date().toLocaleTimeString();
+        },
+
+        toggleDebug() {
+            const panel = document.getElementById('debug-panel');
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        },
+
+        // API数据获取
+        async fetchRealData(brand) {
+            if (this.isDemoMode) return null;
+            
+            const devCfg = USR_CLOUD_CONFIG.devices[brand];
+            if (!devCfg.devId) return null;
+            
+            try {
+                const token = await TokenManager.getToken();
+                const res = await fetch(`${USR_CLOUD_CONFIG.baseURL}/dev/getDevData`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Access-Token': token
+                    },
+                    body: JSON.stringify({ devId: parseInt(devCfg.devId) })
+                });
+                
+                const result = await res.json();
+                if (result.code === 0 && result.data) {
+                    return this.parseCloudData(brand, result.data);
+                }
+            } catch (e) {
+                console.error('获取数据失败:', e);
+                this.showToast('数据获取失败：' + e.message);
+            }
+            return null;
+        },
+
+        parseCloudData(brand, rawData) {
+            const points = USR_CLOUD_CONFIG.dataPoints[brand];
+            const status = { pumps: [], hosts: [], temp: '--', alarms: [] };
+            
+            // 解析泵状态（假设返回1运行，0停止）
+            for(let i=1; i<=3; i++) {
+                const pointId = points[`pump${i}`];
+                const val = this.getPointValue(rawData, pointId);
+                status.pumps.push({
+                    id: i,
+                    status: val === '1' || val === 1 ? 'running' : 'stop',
+                    statusValue: val
+                });
+            }
+            
+            // 解析主机
+            const hostCount = brand === 'prst' ? 6 : 4;
+            for(let i=1; i<=hostCount; i++) {
+                const pointId = points[`host${i}`];
+                const val = this.getPointValue(rawData, pointId);
+                status.hosts.push({
+                    id: i,
+                    status: val === '1' || val === 1 ? 'running' : 'stop'
+                });
+            }
+            
+            // 温度
+            const tempVal = this.getPointValue(rawData, points.temp);
+            if (tempVal) status.temp = (parseFloat(tempVal)/10).toFixed(1);
+            
+            return status;
+        },
+
+        getPointValue(rawData, dataId) {
+            if (!rawData || !rawData.data) return null;
+            const point = rawData.data.find(d => d.dataId === dataId);
+            return point ? point.dataValue : null;
+        },
+
+        // 控制设备（真实API）
+        async controlDeviceReal(brand, type, index, action) {
+            if (this.isDemoMode) {
+                this.showToast('演示模式：控制指令已模拟下发');
+                return;
+            }
+            
+            const devCfg = USR_CLOUD_CONFIG.devices[brand];
+            const points = USR_CLOUD_CONFIG.dataPoints[brand];
+            if (!devCfg.devId) {
+                this.showToast('错误：未配置设备ID');
+                return;
+            }
+            
+            let dataId;
+            if (type === 'pump') {
+                dataId = points[`pump${index+1}`];
+            } else {
+                dataId = points[`host${index+1}`];
+            }
+            
+            const value = action === 'start' ? '1' : '0';
+            
+            try {
+                const token = await TokenManager.getToken();
+                this.showToast('正在下发指令...');
+                
+                const res = await fetch(`${USR_CLOUD_CONFIG.baseURL}/dev/sendDataToDev`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Access-Token': token
+                    },
+                    body: JSON.stringify({
+                        devId: parseInt(devCfg.devId),
+                        slaveIndex: 0,
+                        data: [{ dataId: dataId, dataValue: value }]
+                    })
+                });
+                
+                const result = await res.json();
+                if (result.code === 0) {
+                    this.showToast('指令下发成功');
+                    setTimeout(() => this.enterControl(brand), 1000); // 刷新状态
+                } else {
+                    throw new Error(result.msg);
+                }
+            } catch (e) {
+                this.showToast('控制失败：' + e.message);
+            }
+        },
+
+        startAutoRefresh() {
+            if (this.refreshTimer) clearInterval(this.refreshTimer);
+            this.refreshTimer = setInterval(async () => {
+                if (this.currentBrand && !this.isDemoMode) {
+                    const data = await this.fetchRealData(this.currentBrand);
+                    if (data) {
+                        // 更新本地状态
+                        this.devices[this.currentBrand].pumps = data.pumps;
+                        this.devices[this.currentBrand].hosts = data.hosts;
+                        this.systems[this.currentBrand].temp = data.temp;
+                        // 局部刷新UI
+                        document.getElementById('return-temp').textContent = data.temp + '°C';
+                    }
+                }
+            }, USR_CLOUD_CONFIG.refreshInterval);
+        },
+
+        // UI方法（与之前基本一致，只列出关键修改）
+        renderHome() {
+            const container = document.getElementById('hotel-list');
+            const brands = [
+                {key: 'midea', icon: 'fa-snowflake', color: 'blue'},
+                {key: 'gree', icon: 'fa-wind', color: 'green'},
+                {key: 'prst', icon: 'fa-temperature-low', color: 'orange'},
+                {key: 'hitachi', icon: 'fa-icicles', color: 'purple'}
+            ];
+
+            let html = '';
+            brands.forEach(b => {
+                const sys = this.systems[b.key];
+                const statusClass = sys.online ? 'status-online' : 'status-offline';
+                const statusText = sys.online ? '在线' : '离线';
+                
+                html += `
+                <div onclick="app.enterControl('${b.key}')" class="device-card glass-card rounded-2xl p-4 cursor-pointer sequential-indicator">
+                    <div class="flex justify-between items-start mb-3">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-12 h-12 rounded-xl bg-${b.color}-100 flex items-center justify-center text-${b.color}-600 text-xl">
+                                <i class="fas ${b.icon}"></i>
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-gray-800">${sys.name}</h3>
+                                <p class="text-xs text-gray-500">${sys.location}</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-1 bg-gray-50 px-2 py-1 rounded-full">
+                            <span class="status-dot ${statusClass}"></span>
+                            <span class="text-xs text-gray-600">${statusText}</span>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2 text-center text-sm">
+                        <div class="bg-gray-50 rounded-lg p-2">
+                            <div class="font-bold text-gray-800">${sys.runningHosts}/${sys.hosts}</div>
+                            <div class="text-xs text-gray-500">主机运行</div>
+                        </div>
+                        <div class="bg-gray-50 rounded-lg p-2">
+                            <div class="font-bold text-gray-800">${sys.runningPumps}/${sys.pumps}</div>
+                            <div class="text-xs text-gray-500">水泵运行</div>
+                        </div>
+                        <div class="bg-blue-50 rounded-lg p-2">
+                            <div class="font-bold text-blue-600">进入控制</div>
+                            <div class="text-xs text-blue-400">点击操作 <i class="fas fa-arrow-right"></i></div>
+                        </div>
+                    </div>
+                </div>`;
+            });
+            container.innerHTML = html;
+        },
+
+        enterControl(brand) {
+            this.currentBrand = brand;
+            
+            // 如果是联网模式，先获取最新数据
+            if (!this.isDemoMode) {
+                this.fetchRealData(brand).then(data => {
+                    if (data) {
+                        this.devices[brand].pumps = data.pumps;
+                        this.devices[brand].hosts = data.hosts;
+                        this.systems[brand].temp = data.temp;
+                    }
+                    this.renderControlView(brand);
+                });
+            } else {
+                this.renderControlView(brand);
+            }
+        },
+
+        renderControlView(brand) {
+            const sys = this.systems[brand];
+            const dev = this.devices[brand];
+            
+            document.getElementById('control-title').textContent = sys.name + '空调控制系统';
+            document.getElementById('control-subtitle').textContent = sys.location;
+            document.getElementById('return-temp').textContent = sys.online ? sys.temp + '°C' : '--';
+            
+            // 渲染水泵和主机...（代码与之前提供的相同，省略重复）
+            let pumpHtml = '';
+            dev.pumps.forEach((pump, idx) => {
+                const statusColor = pump.status === 'running' ? 'text-green-500' : 'text-gray-400';
+                const statusIcon = pump.status === 'running' ? 'fa-check-circle' : 'fa-stop-circle';
+                const statusText = pump.status === 'running' ? '运行' : '停止';
+                
+                pumpHtml += `
+                <div class="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                    <div class="flex justify-between items-center mb-2">
+                        <div class="flex items-center">
+                            <span class="${statusColor} mr-2"><i class="fas ${statusIcon}"></i></span>
+                            <span class="font-medium text-gray-700">泵${pump.id}</span>
+                            <span class="ml-2 text-xs ${pump.status === 'running' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'} px-2 py-0.5 rounded">${statusText}</span>
+                        </div>
+                        <div class="flex space-x-1">
+                            ${pump.status === 'running' ? 
+                                `<button onclick="app.controlDevice('pump', ${idx}, 'stop')" class="btn-press px-3 py-1 bg-red-500 text-white text-xs rounded-lg">强制停</button>` :
+                                `<button onclick="app.controlDevice('pump', ${idx}, 'start')" class="btn-press px-3 py-1 bg-green-500 text-white text-xs rounded-lg">强启</button>`
+                            }
+                        </div>
+                    </div>
+                    <div class="flex justify-between items-center text-xs">
+                        <select onchange="app.devices['${brand}'].pumps[${idx}].link=this.value" class="bg-white border border-gray-200 rounded px-2 py-1 text-gray-600">
+                            <option value="group1" ${pump.link === 'group1' ? 'selected' : ''}>一组联动</option>
+                            <option value="group2" ${pump.link === 'group2' ? 'selected' : ''}>二组联动</option>
+                        </select>
+                        <span class="text-gray-400">自动模式</span>
+                    </div>
+                </div>`;
+            });
+            document.getElementById('pump-list').innerHTML = pumpHtml;
+
+            // 渲染主机
+            let hostHtml = '';
+            dev.hosts.forEach((host, idx) => {
+                const isRunning = host.status === 'running';
+                hostHtml += `
+                <div class="bg-gray-50 rounded-xl p-3 border border-gray-100 ${isRunning ? 'border-green-200 bg-green-50' : ''}">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="font-medium text-gray-700 text-sm">主机${host.id}</span>
+                        <span class="text-xs ${isRunning ? 'text-green-600' : 'text-gray-400'}">
+                            <i class="fas fa-power-off"></i> ${isRunning ? '运行中' : '已停止'}
+                        </span>
+                    </div>
+                    <button onclick="app.controlDevice('host', ${idx}, '${isRunning ? 'stop' : 'start'}')" 
+                            class="btn-press w-full py-2 rounded-lg text-sm font-medium transition-colors ${isRunning ? 'bg-red-100 text-red-600 hover:bg-red-200' : 'bg-green-100 text-green-600 hover:bg-green-200'}">
+                        ${isRunning ? '关闭主机' : '开启主机'}
+                    </button>
+                </div>`;
+            });
+            document.getElementById('host-list').innerHTML = hostHtml;
+
+            // 切换视图
+            document.getElementById('home-view').classList.add('hidden');
+            document.getElementById('energy-view').classList.add('hidden');
+            document.getElementById('control-view').classList.remove('hidden');
+            document.getElementById('control-view').classList.add('slide-up');
+        },
+
+        controlDevice(type, index, action) {
+            // 优先调用真实API
+            if (!this.isDemoMode && this.currentBrand) {
+                this.controlDeviceReal(this.currentBrand, type, index, action);
+            } else {
+                // 演示模式本地更新
+                const dev = this.devices[this.currentBrand];
+                if(type === 'pump') {
+                    dev.pumps[index].status = action === 'start' ? 'running' : 'stop';
+                } else {
+                    dev.hosts[index].status = action === 'start' ? 'running' : 'stop';
+                }
+                this.renderControlView(this.currentBrand);
+                this.showToast(`${type === 'pump' ? '水泵' : '主机'}${index + 1}已${action === 'start' ? '启动' : '停止'}(演示)`);
+            }
+        },
+
+        // 联动控制（带延时）
+        async oneKeyStart() {
+            const statusEl = document.getElementById('sequence-status');
+            const textEl = document.getElementById('sequence-text');
+            const progressEl = document.getElementById('sequence-progress');
+            
+            statusEl.classList.remove('hidden');
+            textEl.textContent = '阶段 1/2：启动冷冻水泵...';
+            progressEl.style.width = '30%';
+            
+            // 启动所有泵
+            for(let i = 0; i < 3; i++) {
+                this.controlDevice('pump', i, 'start');
+                await this.delay(1000);
+            }
+            progressEl.style.width = '60%';
+            
+            await this.delay(2000);
+            textEl.textContent = '阶段 2/2：启动空调主机...';
+            
+            for(let i = 0; i < 4; i++) {
+                this.controlDevice('host', i, 'start');
+                await this.delay(800);
+            }
+            
+            progressEl.style.width = '100%';
+            textEl.textContent = '联动启动完成';
+            setTimeout(() => statusEl.classList.add('hidden'), 1000);
+            this.showToast('一键启动完成（先泵后机）');
+        },
+
+        async oneKeyStop() {
+            const statusEl = document.getElementById('sequence-status');
+            const textEl = document.getElementById('sequence-text');
+            const progressEl = document.getElementById('sequence-progress');
+            
+            statusEl.classList.remove('hidden');
+            textEl.textContent = '阶段 1/2：停止空调主机...';
+            progressEl.style.width = '30%';
+            
+            for(let i = 3; i >= 0; i--) {
+                this.controlDevice('host', i, 'stop');
+                await this.delay(800);
+            }
+            
+            await this.delay(2000);
+            textEl.textContent = '阶段 2/2：停止冷冻水泵...';
+            progressEl.style.width = '70%';
+            
+            for(let i = 2; i >= 0; i--) {
+                this.controlDevice('pump', i, 'stop');
+                await this.delay(1000);
+            }
+            
+            progressEl.style.width = '100%';
+            setTimeout(() => statusEl.classList.add('hidden'), 1000);
+            this.showToast('一键停止完成（先机后泵）');
+        },
+
+        // 基础功能
+        updateTime() {
+            const now = new Date();
+            const str = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + 
+                       String(now.getDate()).padStart(2,'0') + ' ' + String(now.getHours()).padStart(2,'0') + ':' + 
+                       String(now.getMinutes()).padStart(2,'0') + ':' + String(now.getSeconds()).padStart(2,'0');
+            const el = document.getElementById('current-time');
+            if(el) el.textContent = str;
+        },
+
+        goHome() {
+            document.getElementById('control-view').classList.add('hidden');
+            document.getElementById('energy-view').classList.add('hidden');
+            document.getElementById('home-view').classList.remove('hidden');
+            this.currentBrand = null;
+        },
+
+        switchTab(tab) {
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                if(btn.dataset.tab === tab) {
+                    btn.classList.remove('text-gray-400');
+                    btn.classList.add('text-blue-600');
+                } else {
+                    btn.classList.remove('text-blue-600');
+                    btn.classList.add('text-gray-400');
+                }
+            });
+
+            if(tab === 'home') this.goHome();
+            else if(tab === 'energy') {
+                document.getElementById('home-view').classList.add('hidden');
+                document.getElementById('control-view').classList.add('hidden');
+                document.getElementById('energy-view').classList.remove('hidden');
+                document.getElementById('energy-view').classList.add('slide-up');
+            } else if(tab === 'settings') this.showToast('设置功能开发中...');
+        },
+
+        emergencyStop() {
+            if(confirm('确定要紧急停止所有系统吗？')) {
+                ['midea','gree','prst','hitachi'].forEach(b => {
+                    this.devices[b].pumps.forEach(p => p.status = 'stop');
+                    this.devices[b].hosts.forEach(h => h.status = 'stop');
+                });
+                this.showToast('已紧急停止所有设备');
+                this.renderHome();
+            }
+        },
+
+        autoModeAll() {
+            Object.keys(this.devices).forEach(key => {
+                this.devices[key].pumps.forEach(p => p.link = 'group1');
+            });
+            this.showToast('已切换到全自动模式');
+        },
+
+        delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); },
+        
+        showToast(msg) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-text').textContent = msg;
+            toast.classList.remove('hidden');
+            setTimeout(() => toast.classList.add('hidden'), 2000);
+        },
+
+        initEnergyChart() {
+            const ctx = document.getElementById('energyChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['00:00', '04:00', '08:00', '12:00', '16:00', '20:00'],
+                    datasets: [{
+                        label: '实时功率(kW)',
+                        data: [120, 80, 150, 280, 320, 250],
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } },
+                        x: { grid: { display: false } }
+                    }
+                }
+            });
+        },
+        
+        updateEnergyChart(period) {
+            this.showToast('已切换到' + (period === 'day' ? '今日' : period === 'week' ? '本周' : '本月') + '数据');
+        }
+    };
+
+    // 启动
+    window.onload = () => app.init();
+    </script>
+</body>
+</html>
